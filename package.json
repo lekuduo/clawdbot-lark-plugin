@@ -1,0 +1,46 @@
+{
+  "name": "@clawdbot/lark",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Clawdbot Lark (飞书/Feishu) channel plugin with WebSocket long connection support",
+  "author": "Clawdbot Community",
+  "license": "MIT",
+  "keywords": [
+    "clawdbot",
+    "lark",
+    "feishu",
+    "飞书",
+    "channel",
+    "plugin",
+    "chatbot",
+    "ai",
+    "websocket"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clawdbot/clawdbot-lark-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/clawdbot/clawdbot-lark-plugin/issues"
+  },
+  "homepage": "https://github.com/clawdbot/clawdbot-lark-plugin#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "clawdbot": {
+    "extensions": ["./index.ts"]
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "clawdbot.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.40.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
