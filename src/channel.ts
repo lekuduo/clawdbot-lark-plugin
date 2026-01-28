@@ -572,13 +572,21 @@ async function getBotOpenId(
   }
 
   try {
-    const response = await (client as any).bot.info();
-    const botOpenId = response.data?.bot?.open_id || "";
+    // 使用正确的 API 获取机器人信息
+    const response = await (client as any).request({
+      method: 'GET',
+      url: '/open-apis/bot/v3/info/',
+    });
+    // 飞书 API 响应结构: { code: 0, msg: "ok", bot: { open_id: "ou_xxx", ... } }
+    const botOpenId = response?.bot?.open_id || "";
+    console.log(`[lark:${accountId}] Got bot info response:`, JSON.stringify(response));
+    console.log(`[lark:${accountId}] Got bot open_id: ${botOpenId}`);
     if (botOpenId) {
       botOpenIdCache.set(accountId, botOpenId);
     }
     return botOpenId;
-  } catch {
+  } catch (err: any) {
+    console.error(`[lark:${accountId}] Failed to get bot info:`, err.message, err);
     return "";
   }
 }
@@ -650,14 +658,24 @@ async function processMessage(params: {
       const botOpenId = await getBotOpenId(client, accountId);
 
       const mentions = messageData.mentions || [];
-      // 检查是否 @了机器人自己，而不是任意 @
+      console.log(`[lark:${accountId}] botOpenId=${botOpenId}, mentions=`, JSON.stringify(mentions.map((m: any) => ({ key: m.key, open_id: m.id?.open_id, name: m.name }))));
+
+      // 检查是否 @了机器人自己
       const isMentionedBot = mentions.some((m: any) => {
         const mentionOpenId = m.id?.open_id;
-        // 如果有 botOpenId，精确匹配；否则检查是否 @all
+        // @all 总是响应
+        if (m.key === "@_all") {
+          return true;
+        }
+        // 如果有 botOpenId，精确匹配
         if (botOpenId && mentionOpenId) {
           return mentionOpenId === botOpenId;
         }
-        return m.key === "@_all";
+        // 如果无法获取 botOpenId，回退到有任意 @mention 就响应
+        if (!botOpenId && mentionOpenId) {
+          return true;
+        }
+        return false;
       });
 
       if (!isMentionedBot) {
