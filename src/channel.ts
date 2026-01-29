@@ -341,7 +341,207 @@ function markdownToLarkRichText(markdown: string): any {
 }
 
 /**
- * 创建消息卡片
+ * 检测文本是否包含需要富文本渲染的 Markdown 格式
+ * 飞书卡片的 markdown 组件支持: 加粗、斜体、删除线、链接、行内代码、代码块
+ * 不支持: 表格（需要用 table 组件）、标题（用加粗代替）
+ */
+function hasMarkdownFeatures(text: string): boolean {
+  const patterns = [
+    /\*\*[^*]+\*\*/,         // 加粗 **text**
+    /\*[^*]+\*/,             // 斜体 *text*
+    /~~[^~]+~~/,             // 删除线 ~~text~~
+    /`[^`]+`/,               // 行内代码 `code`
+    /```[\s\S]*?```/,        // 代码块
+    /\[([^\]]+)\]\([^)]+\)/, // 链接 [text](url)
+    /^\s*[-*]\s+/m,          // 无序列表
+    /^\s*\d+\.\s+/m,         // 有序列表
+    /^#{1,6}\s+/m,           // 标题（会转换为加粗）
+    /^\|.*\|.*\|/m,          // 表格
+  ];
+
+  return patterns.some(pattern => pattern.test(text));
+}
+
+/**
+ * 检测文本是否包含 Markdown 表格
+ */
+function hasMarkdownTable(text: string): boolean {
+  // 表格至少要有: | header | header | 和 |---|---|
+  const lines = text.split('\n');
+  let hasHeaderRow = false;
+  let hasSeparator = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      if (/^\|[\s:-]+\|/.test(trimmed) && trimmed.includes('---')) {
+        hasSeparator = true;
+      } else if (trimmed.split('|').length >= 3) {
+        hasHeaderRow = true;
+      }
+    }
+  }
+
+  return hasHeaderRow && hasSeparator;
+}
+
+/**
+ * 解析 Markdown 表格为飞书表格数据
+ */
+function parseMarkdownTable(tableText: string): { columns: any[]; rows: any[] } | null {
+  const lines = tableText.trim().split('\n').filter(line => {
+    const t = line.trim();
+    return t.startsWith('|') && t.endsWith('|');
+  });
+
+  if (lines.length < 2) return null;
+
+  // 解析单元格
+  const parseCells = (line: string): string[] => {
+    return line
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map(cell => cell.trim());
+  };
+
+  // 找表头和分隔符
+  const headers = parseCells(lines[0]);
+  if (headers.length === 0) return null;
+
+  // 找分隔行位置
+  let dataStart = 1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].includes('---')) {
+      dataStart = i + 1;
+      break;
+    }
+  }
+
+  // 构建列
+  const columns = headers.map((header, i) => ({
+    name: `c${i}`,
+    display_name: header.replace(/\*\*/g, ''),
+    data_type: "text",
+    width: "auto",
+  }));
+
+  // 构建行
+  const rows: any[] = [];
+  for (let i = dataStart; i < lines.length; i++) {
+    const cells = parseCells(lines[i]);
+    const row: any = {};
+    cells.forEach((val, j) => {
+      if (j < columns.length) {
+        row[`c${j}`] = val;
+      }
+    });
+    if (Object.keys(row).length > 0) {
+      rows.push(row);
+    }
+  }
+
+  return columns.length > 0 && rows.length > 0 ? { columns, rows } : null;
+}
+
+/**
+ * 转换 Markdown 标题为加粗格式（飞书 markdown 不支持 # 标题）
+ */
+function convertMarkdownHeaders(text: string): string {
+  return text.replace(/^(#{1,6})\s+(.+)$/gm, '**$2**');
+}
+
+/**
+ * 创建智能消息卡片
+ * - 普通 Markdown 用 markdown 组件渲染
+ * - 表格用 table 组件渲染
+ */
+function createSmartMessageCard(content: string): string {
+  const elements: any[] = [];
+
+  // 转换标题为加粗
+  let processedContent = convertMarkdownHeaders(content);
+
+  if (hasMarkdownTable(processedContent)) {
+    // 有表格，需要拆分处理
+    const lines = processedContent.split('\n');
+    let buffer: string[] = [];
+    let tableBuffer: string[] = [];
+    let inTable = false;
+
+    const flushBuffer = () => {
+      const text = buffer.join('\n').trim();
+      if (text) {
+        elements.push({ tag: "markdown", content: text });
+      }
+      buffer = [];
+    };
+
+    const flushTable = () => {
+      if (tableBuffer.length >= 2) {
+        const tableData = parseMarkdownTable(tableBuffer.join('\n'));
+        if (tableData) {
+          elements.push({
+            tag: "table",
+            page_size: Math.min(tableData.rows.length, 20),
+            row_height: "low",
+            header_style: {
+              text_align: "left",
+              text_size: "normal",
+              background_style: "grey",
+              bold: true,
+              lines: 1,
+            },
+            columns: tableData.columns,
+            rows: tableData.rows,
+          });
+        }
+      }
+      tableBuffer = [];
+    };
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const isTableLine = trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 2;
+
+      if (isTableLine) {
+        if (!inTable) {
+          flushBuffer();
+          inTable = true;
+        }
+        tableBuffer.push(line);
+      } else {
+        if (inTable) {
+          flushTable();
+          inTable = false;
+        }
+        buffer.push(line);
+      }
+    }
+
+    // 处理剩余内容
+    if (inTable) {
+      flushTable();
+    } else {
+      flushBuffer();
+    }
+  } else {
+    // 无表格，直接用 markdown
+    elements.push({ tag: "markdown", content: processedContent });
+  }
+
+  if (elements.length === 0) {
+    elements.push({ tag: "markdown", content: content });
+  }
+
+  return JSON.stringify({
+    config: { wide_screen_mode: true },
+    elements,
+  });
+}
+
+/**
+ * 创建消息卡片（带标题）
  */
 function createMessageCard(title: string, content: string, color?: string): string {
   return JSON.stringify({
@@ -984,13 +1184,16 @@ async function processMessage(params: {
         if (!replyText.trim()) return;
 
         // 智能选择消息格式
-        const hasCodeBlock = replyText.includes("```");
-        if (hasCodeBlock && account.features.markdown) {
-          // 代码块使用富文本
-          const richText = markdownToLarkRichText(replyText);
-          await sendRichTextMessage(client, replyTarget, "chat_id", richText);
+        // 优先使用消息卡片来渲染 Markdown（包括表格、标题、加粗等）
+        const useCard = account.features.cards && hasMarkdownFeatures(replyText);
+        
+        if (useCard) {
+          // 使用智能卡片发送（支持表格和各种 Markdown 格式）
+          const card = createSmartMessageCard(replyText);
+          await sendCardMessage(client, replyTarget, "chat_id", card);
+          console.log(`[lark:${accountId}] Sent message as card (markdown detected)`);
         } else {
-          // 普通消息分段发送
+          // 纯文本消息分段发送
           const chunks = splitMessage(replyText);
           for (const chunk of chunks) {
             await sendTextMessage(client, replyTarget, "chat_id", chunk);
